@@ -9,9 +9,6 @@ import inspect
 from multiprocessing import Process
 
 
-# ============================================================================================#
-# Utilities
-# ============================================================================================#
 def build_mlp(
         input_placeholder,
         output_size,
@@ -19,19 +16,7 @@ def build_mlp(
         n_layers=2,
         size=64,
         activation=tf.tanh,
-        output_activation=None
-):
-    # ========================================================================================#
-    #                           ----------SECTION 3----------
-    # Network building
-    #
-    # Your code should make a feedforward neural network (also called a multilayer perceptron)
-    # with 'n_layers' hidden layers of size 'size' units.
-    #
-    # The output layer should have size 'output_size' and activation 'output_activation'.
-    #
-    # Hint: use tf.layers.dense
-    # ========================================================================================#
+        output_activation=None):
 
     with tf.variable_scope(scope):
         # YOUR_CODE_HERE
@@ -57,19 +42,157 @@ def build_mlp(
         return output
 
 
+
 def pathlength(path):
     return len(path["reward"])
 
 
-# ============================================================================================#
-# Policy Gradient
-# ============================================================================================#
+
+def collect_paths(sess, sy_sampled_ac, sy_ob_no, env, min_timesteps,
+                  max_path_length, animate, itr):
+    """Collects one batch of dataset. Return that many paths that when summed
+       contain at minimum 'min_timesteps' timesteps.
+
+    Returns:
+    paths: dict of: "observation" , "reward", "action" mapped to ndarrays.
+    timesteps_this_batch: int - number of collected timesteps
+
+    """
+
+    timesteps_this_batch = 0
+    paths = []
+    while True:
+        ob = env.reset()
+        obs, acs, rewards = [], [], []
+        animate_this_episode = (len(paths) == 0 and (itr % 10 == 0) and animate)
+        steps = 0
+        while True:
+            if animate_this_episode:
+                env.render()
+                time.sleep(0.05)
+            obs.append(ob)
+            ac = sess.run(sy_sampled_ac, feed_dict={sy_ob_no: ob[None]})
+            ac = ac[0][0]
+            acs.append(ac)
+            ob, rew, done, _ = env.step(ac)
+            rewards.append(rew)
+            steps += 1
+            if done or steps > max_path_length:
+                break
+
+        path = {"observation": np.array(obs),
+                "reward": np.array(rewards),
+                "action": np.array(acs)}
+        paths.append(path)
+
+        timesteps_this_batch += pathlength(path)
+
+        if timesteps_this_batch > min_timesteps:
+            break
+
+    return paths, timesteps_this_batch
+
+
+
+def get_reward(paths, gamma=0.99, reward_to_go=True):
+    """Computing Q-values
+
+    Your code should construct numpy arrays for Q-values which will be used to compute
+    advantages (which will in turn be fed to the placeholder you defined above).
+
+    Recall that the expression for the policy gradient PG is
+
+    PG = E_{tau} [sum_{t=0}^T grad log pi(a_t|s_t) * (Q_t - b_t )]
+
+    where
+
+    tau=(s_0, a_0, ...) is a trajectory,
+    Q_t is the Q-value at time t, Q^{pi}(s_t, a_t),
+    and b_t is a baseline which may depend on s_t.
+
+    You will write code for two cases, controlled by the flag 'reward_to_go':
+
+    Case 1: trajectory-based PG
+    (reward_to_go = False)
+
+    Instead of Q^{pi}(s_t, a_t), we use the total discounted reward summed over
+    entire trajectory (regardless of which time step the Q-value should be for).
+
+    For this case, the policy gradient estimator is
+
+    E_{tau} [sum_{t=0}^T grad log pi(a_t|s_t) * Ret(tau)]
+
+    where
+    Ret(tau) = sum_{t'=0}^T gamma^t' r_{t'}.
+
+    Thus, you should compute
+    Q_t = Ret(tau)
+
+    Case 2: reward-to-go PG
+    (reward_to_go = True)
+
+    Here, you estimate Q^{pi}(s_t, a_t) by the discounted sum of rewards starting
+    from time step t. Thus, you should compute
+
+    Q_t = sum_{t'=t}^T gamma^(t'-t) * r_{t'}
+
+    Store the Q-values for all timesteps and all trajectories in a variable 'q_n',
+    like the 'ob_no' and 'ac_na' above.
+
+
+    Parameters
+    ----------
+    paths
+    gamma
+    reward_to_go
+
+    Returns
+    -------
+
+    """
+
+    if reward_to_go:
+        #  Q_t = sum_{t'=t}^T gamma^(t'-t) * r_{t'}
+
+        q_values_n = []
+        for path in paths:
+            path_rewards = path["reward"]
+            q_values = []  # q_values for current path
+
+            # precompute vector with dicounted gamma
+            gammas = np.array([gamma ** i for i in range(len(path_rewards))])
+
+            # compute q_value for each time step in trajectory
+            for i in range(len(path_rewards)):
+                if i == 0:
+                    q_values.append(gammas @ path_rewards)
+                else:
+                    q_values.append(gammas[:-i] @ path_rewards[i:])
+
+            q_values_n.append(q_values)
+
+        q_n = np.concatenate(q_values_n)
+    else:
+        #  Q_t = sum_{t'=0}^T gamma^t' r_{t'}.
+
+        reward_sum = 0  # sum of reward for each single trajectory
+        q_values_n = []
+        for path in paths:
+            path_rewards = path["reward"]
+            for i, reward in enumerate(path_rewards):
+                reward_sum += reward * gamma ** i
+            q_values_n.append([reward_sum] * len(path_rewards))
+        q_n = np.concatenate(q_values_n)
+
+    return q_n
+
+
 
 def train_PG(exp_name='',
              env_name='CartPole-v0',
              n_iter=100,
              gamma=1.0,
-             min_timesteps_per_batch=1000,
+             min_timesteps=1000,
              max_path_length=None,
              learning_rate=5e-3,
              reward_to_go=True,
@@ -82,6 +205,7 @@ def train_PG(exp_name='',
              n_layers=1,
              size=32
              ):
+
     start = time.time()
 
     # Configure output directory for logging
@@ -106,33 +230,11 @@ def train_PG(exp_name='',
     # Maximum length for episodes
     max_path_length = max_path_length or env.spec.max_episode_steps
 
-    # ========================================================================================#
-    # Notes on notation:
-    #
-    # Symbolic variables have the prefix sy_, to distinguish them from the numerical values
-    # that are computed later in the function
-    #
-    # Prefixes and suffixes:
-    # ob - observation
-    # ac - action
-    # _no - this tensor should have shape (batch size /n/, observation dim)
-    # _na - this tensor should have shape (batch size /n/, action dim)
-    # _n  - this tensor should have shape (batch size /n/)
-    #
-    # Note: batch size /n/ is defined at runtime, and until then, the shape for that axis
-    # is None
-    # ========================================================================================#
 
     # Observation and action sizes
     ob_dim = env.observation_space.shape[0]
     ac_dim = env.action_space.n if discrete else env.action_space.shape[0]
 
-    # ========================================================================================#
-    #                           ----------SECTION 4----------
-    # Placeholders
-    #
-    # Need these for batch observations / actions / advantages in policy gradient loss function.
-    # ========================================================================================#
 
     sy_ob_no = tf.placeholder(shape=[None, ob_dim], name="ob", dtype=tf.float32)
     if discrete:
@@ -142,7 +244,6 @@ def train_PG(exp_name='',
                                   dtype=tf.float32)
 
     # Define a placeholder for advantages
-    # sy_adv_n = tf.placeholder(shape=[None, max_path_length], name="adv", dtype=tf.float32)
     sy_adv_n = tf.placeholder(shape=[None], name="adv", dtype=tf.float32)
 
     # ========================================================================================#
@@ -206,29 +307,39 @@ def train_PG(exp_name='',
         sy_logprob_n = tf.gather_nd(sy_logits_na, indices)
 
     else:
-        # YOUR_CODE_HERE
-        # sy_mean = TODO
-        # sy_logstd = TODO # logstd should just be a trainable variable, not a network output.
-        # sy_sampled_ac = TODO
-        # sy_logprob_n = TODO  # Hint: Use the log probability under a multivariate gaussian.
-        raise NotImplementedError
+        # Network takes current observated state and outputs the meand and log
+        # std of Gaussion distribution over actions.
+
+        net_output_dim = ac_dim
+        sy_mean = build_mlp(
+            input_placeholder=sy_ob_no,
+            output_size=net_output_dim,
+            scope="ham",
+            n_layers=n_layers,
+            size=size,
+            activation=tf.nn.relu,
+        )
+
+        # logstd should just be a trainable variable, not a network output.
+        sy_logstd = tf.Variable(tf.ones(ac_dim))
+
+        sy_sampled_ac = sy_mean + sy_logstd * tf.random_normal(shape=[None, ac_dim])
+
+        # Hint: Use the log probability under a multivariate gaussian.
+        dist = tf.distributions.Normal(loc=[sy_mean], scale=[sy_logstd])
+        sy_logprob_n = tf.log(dist.prob(sy_ac_na))
+
 
     # Loss Function and Training Operation
     negative_likelihoods = tf.nn.softmax_cross_entropy_with_logits(
         labels=tf.one_hot(sy_ac_na, depth=ac_dim), logits=sy_logits_na)
     weighted_negative_likelihoods = tf.multiply(negative_likelihoods, sy_adv_n)
-    # fuckme: might want to get rid of minus sign
+
     loss = tf.reduce_mean(weighted_negative_likelihoods)
 
     update_op = tf.train.AdamOptimizer(learning_rate).minimize(loss)
 
     if nn_baseline:
-        # ========================================================================================#
-        #                           ----------SECTION 5----------
-        # Optional Baseline
-        # ========================================================================================#
-        # TODO
-
         baseline_prediction = tf.squeeze(build_mlp(
             sy_ob_no,
             1,
@@ -239,6 +350,7 @@ def train_PG(exp_name='',
         # neural network baseline. These will be used to fit the neural network baseline.
         # YOUR_CODE_HERE
         # baseline_update_op = TODO
+        raise NotImplemented
 
     # ========================================================================================#
     # Tensorflow Engineering: Config, Session, Variable initialization
@@ -260,24 +372,18 @@ def train_PG(exp_name='',
         print("********** Iteration %i ************" % itr)
 
         # Collect paths until we have enough timesteps for one batch
-        paths = _collect_paths(sess, env, sy_sampled_ac, sy_ob_no,
-                               total_timesteps, min_timesteps_per_batch,
-                               max_path_length,
-                               animate, itr)
+        paths, num_collected_timesteps = collect_paths(sess, sy_sampled_ac, sy_ob_no, env,
+                                                       min_timesteps, max_path_length,
+                                                       animate, itr)
+        total_timesteps += num_collected_timesteps
 
         # Build arrays for observation, action for the policy gradient update
         #  by concatenating  across paths
         ob_no = np.concatenate([path["observation"] for path in paths])
         ac_na = np.concatenate([path["action"] for path in paths])
-        q_n = _get_rewards(paths, gamma, reward_to_go)
+        q_n = get_reward(paths, gamma, reward_to_go)
 
         if nn_baseline:
-            # TODO
-            # ====================================================================================#
-            #                           ----------SECTION 5----------
-            # Computing Baselines
-            # ====================================================================================#
-
             # If nn_baseline is True, use your neural network to predict reward-to-go
             # at each timestep for each trajectory, and save the result in a variable 'b_n'
             # like 'ob_no', 'ac_na', and 'q_n'.
@@ -299,7 +405,6 @@ def train_PG(exp_name='',
             adv_n = (adv_n - np.mean(adv_n)) / np.std(adv_n)
 
         if nn_baseline:
-            # ----------SECTION 5---------- TODO
             # If a neural network baseline is used, set up the targets and the inputs for the
             # baseline.
             #
@@ -317,7 +422,6 @@ def train_PG(exp_name='',
         #print("na: ", type(ob_no))
         #print("adv: ", type(ob_no))
 
-        #sy_ac_na: np.eye(ac_dim)[ac_na],  # taken actions
 
         loss_before = sess.run(loss, feed_dict={
             sy_ob_no: ob_no,  # observation
@@ -357,137 +461,6 @@ def train_PG(exp_name='',
         logz.dump_tabular()
         logz.pickle_tf_vars()
 
-
-def _collect_paths(sess, env, sy_sampled_ac, sy_ob_no,
-                   total_timesteps, min_timesteps_per_batch, max_path_length,
-                   animate, itr):
-    timesteps_this_batch = 0
-    paths = []
-    while True:
-        ob = env.reset()
-        obs, acs, rewards = [], [], []
-        animate_this_episode = (len(paths) == 0 and (itr % 10 == 0) and animate)
-        steps = 0
-        while True:
-            if animate_this_episode:
-                env.render()
-                time.sleep(0.05)
-            obs.append(ob)
-            ac = sess.run(sy_sampled_ac, feed_dict={sy_ob_no: ob[None]})
-            ac = ac[0][0]
-            acs.append(ac)
-            ob, rew, done, _ = env.step(ac)
-            rewards.append(rew)
-            steps += 1
-            if done or steps > max_path_length:
-                break
-        path = {"observation": np.array(obs),
-                "reward": np.array(rewards),
-                "action": np.array(acs)}
-        paths.append(path)
-        timesteps_this_batch += pathlength(path)
-        if timesteps_this_batch > min_timesteps_per_batch:
-            break
-    total_timesteps += timesteps_this_batch
-
-    return paths
-
-
-def _get_rewards(paths, gamma=0.99, reward_to_go=True):
-    """Computing Q-values
-
-Your code should construct numpy arrays for Q-values which will be used to compute
-advantages (which will in turn be fed to the placeholder you defined above).
-
-Recall that the expression for the policy gradient PG is
-
-PG = E_{tau} [sum_{t=0}^T grad log pi(a_t|s_t) * (Q_t - b_t )]
-
-where
-
-tau=(s_0, a_0, ...) is a trajectory,
-Q_t is the Q-value at time t, Q^{pi}(s_t, a_t),
-and b_t is a baseline which may depend on s_t.
-
-You will write code for two cases, controlled by the flag 'reward_to_go':
-
-Case 1: trajectory-based PG
-
-(reward_to_go = False)
-
-Instead of Q^{pi}(s_t, a_t), we use the total discounted reward summed over
-entire trajectory (regardless of which time step the Q-value should be for).
-
-For this case, the policy gradient estimator is
-
-E_{tau} [sum_{t=0}^T grad log pi(a_t|s_t) * Ret(tau)]
-
-where
-
-Ret(tau) = sum_{t'=0}^T gamma^t' r_{t'}.
-
-Thus, you should compute
-
-Q_t = Ret(tau)
-
-Case 2: reward-to-go PG
-
-(reward_to_go = True)
-
-Here, you estimate Q^{pi}(s_t, a_t) by the discounted sum of rewards starting
-from time step t. Thus, you should compute
-
-Q_t = sum_{t'=t}^T gamma^(t'-t) * r_{t'}
-
-Store the Q-values for all timesteps and all trajectories in a variable 'q_n',
-like the 'ob_no' and 'ac_na' above.
-
-
-Parameters
-----------
-paths
-gamma
-reward_to_go
-
-Returns
--------
-
-"""
-
-    if reward_to_go:
-        #  Q_t = sum_{t'=t}^T gamma^(t'-t) * r_{t'}
-
-        q_values_n = []
-        for path in paths:
-            path_rewards = path["reward"]
-            q_values = []  # q_values for current path
-
-            # precompute vector with dicounted gamma
-            gammas = np.array([gamma ** i for i in range(len(path_rewards))])
-
-            # compute q_value for each time step in trajectory
-            for i in range(len(path_rewards)):
-                if i == 0:
-                    q_values.append(gammas @ path_rewards)
-                else:
-                    q_values.append(gammas[:-i] @ path_rewards[i:])
-
-            q_values_n.append(q_values)
-
-        q_n = np.concatenate(q_values_n)
-    else:
-        #  Q_t = sum_{t'=0}^T gamma^t' r_{t'}.
-
-        reward_sum = 0  # sum of reward for each single trajectory
-        q_values_n = []
-        for path in paths:
-            path_rewards = path["reward"]
-            for i, reward in enumerate(path_rewards):
-                reward_sum += reward * gamma ** i
-            q_values_n.append([reward_sum] * len(path_rewards))
-        q_n = np.concatenate(q_values_n)
-
-    return q_n
 
 
 def main():
@@ -531,7 +504,7 @@ def main():
                 env_name=args.env_name,
                 n_iter=args.n_iter,
                 gamma=args.discount,
-                min_timesteps_per_batch=args.batch_size,
+                min_timesteps=args.batch_size,
                 max_path_length=max_path_length,
                 learning_rate=args.learning_rate,
                 reward_to_go=args.reward_to_go,
@@ -551,6 +524,17 @@ def main():
         p.join()
 
 
+
+
+if __name__ == "__main__":
+    # main()
+    # build_mlp_test()
+
+    train_PG(
+        n_iter=100
+    )
+
+
 def build_mlp_test():
     with tf.variable_scope("test") as test_scope:
         input_holder = tf.placeholder(tf.float32, [None, 20])
@@ -566,12 +550,3 @@ def build_mlp_test():
         )
 
         print(output)
-
-
-if __name__ == "__main__":
-    # main()
-    # build_mlp_test()
-
-    train_PG(
-        n_iter=1000
-    )
