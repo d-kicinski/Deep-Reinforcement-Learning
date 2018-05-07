@@ -49,7 +49,7 @@ def pathlength(path):
 
 
 def collect_paths(sess, sy_sampled_ac, sy_ob_no, env, min_timesteps,
-                  max_path_length, animate, itr):
+                  max_path_length, to_animate, itr):
     """Collects one batch of dataset. Return that many paths that when summed
        contain at minimum 'min_timesteps' timesteps.
 
@@ -64,12 +64,17 @@ def collect_paths(sess, sy_sampled_ac, sy_ob_no, env, min_timesteps,
     while True:
         ob = env.reset()
         obs, acs, rewards = [], [], []
-        animate_this_episode = (len(paths) == 0 and (itr % 10 == 0) and animate)
+        #animate_this_episode = (len(paths) == 0 and (itr % 10 == 0) and animate)
+
+        to_animate.animate = (len(paths) == 0 and (itr % 20 == 0))
+
         steps = 0
         while True:
-            if animate_this_episode:
+            #if animate_this_episode:
+            if to_animate.animate:
                 env.render()
                 time.sleep(0.05)
+
             obs.append(ob)
             ac = sess.run(sy_sampled_ac, feed_dict={sy_ob_no: ob[None]})
             ac = ac[0][0]
@@ -139,16 +144,6 @@ def get_reward(paths, gamma=0.99, reward_to_go=True):
     Store the Q-values for all timesteps and all trajectories in a variable 'q_n',
     like the 'ob_no' and 'ac_na' above.
 
-
-    Parameters
-    ----------
-    paths
-    gamma
-    reward_to_go
-
-    Returns
-    -------
-
     """
 
     if reward_to_go:
@@ -187,6 +182,13 @@ def get_reward(paths, gamma=0.99, reward_to_go=True):
     return q_n
 
 
+class ToAnimate:
+    def __init__(self, animate):
+        self.animate = animate
+
+    def __call__(self, episode_id):
+        return self.animate
+
 
 def train_PG(exp_name='',
              env_name='CartPole-v0',
@@ -196,7 +198,7 @@ def train_PG(exp_name='',
              max_path_length=None,
              learning_rate=5e-3,
              reward_to_go=True,
-             animate=True,
+             to_animate=True,
              logdir=None,
              normalize_advantages=True,
              nn_baseline=False,
@@ -223,6 +225,17 @@ def train_PG(exp_name='',
 
     # Make the gym environment
     env = gym.make(env_name)
+
+    #env = gym.wrappers.Monitor(env, "./video/", force=True, video_callable=lambda episode_id: episode_id%300==0)
+
+
+    to_animate = ToAnimate(False)
+    to_animate.animate = False
+
+    #to_animate = lambda episode_id: episode_id==1 and to_animate.animate
+
+    env = gym.wrappers.Monitor(env, "./video/", force=True, video_callable=to_animate)
+
 
     # Is this env continuous, or discrete?
     discrete = isinstance(env.action_space, gym.spaces.Discrete)
@@ -374,7 +387,7 @@ def train_PG(exp_name='',
         # Collect paths until we have enough timesteps for one batch
         paths, num_collected_timesteps = collect_paths(sess, sy_sampled_ac, sy_ob_no, env,
                                                        min_timesteps, max_path_length,
-                                                       animate, itr)
+                                                       to_animate, itr)
         total_timesteps += num_collected_timesteps
 
         # Build arrays for observation, action for the policy gradient update
@@ -508,7 +521,7 @@ def main():
                 max_path_length=max_path_length,
                 learning_rate=args.learning_rate,
                 reward_to_go=args.reward_to_go,
-                animate=args.render,
+                to_animate=args.render,
                 logdir=os.path.join(logdir, '%d' % seed),
                 normalize_advantages=not (args.dont_normalize_advantages),
                 nn_baseline=args.nn_baseline,
