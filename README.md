@@ -1,4 +1,4 @@
-# My solutions for berekleyes cs294 assignments.
+# My solutions for berekley cs294 assignments.
 
 ## Course info:
 - Name: CS 294: Deep Reinforcement Learning, Fall 2017
