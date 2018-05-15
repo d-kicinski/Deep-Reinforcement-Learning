@@ -66,7 +66,8 @@ def collect_paths(sess, sy_sampled_ac, sy_ob_no, env, min_timesteps,
         obs, acs, rewards = [], [], []
         #animate_this_episode = (len(paths) == 0 and (itr % 10 == 0) and animate)
 
-        to_animate.animate = (len(paths) == 0 and (itr % 20 == 0))
+        animate = True
+        to_animate.animate = (len(paths) == 0 and (itr % 20 == 0) and animate)
 
         steps = 0
         while True:
@@ -77,7 +78,9 @@ def collect_paths(sess, sy_sampled_ac, sy_ob_no, env, min_timesteps,
 
             obs.append(ob)
             ac = sess.run(sy_sampled_ac, feed_dict={sy_ob_no: ob[None]})
-            ac = ac[0][0]
+            #print("ac from tensor: ", ac)
+            ac = ac[0]
+            #print("ac extracted: ", ac)
             acs.append(ac)
             ob, rew, done, _ = env.step(ac)
             rewards.append(rew)
@@ -205,7 +208,8 @@ def train_PG(exp_name='',
              seed=0,
              # network arguments
              n_layers=1,
-             size=32
+             size=32,
+             save_video=False
              ):
 
     start = time.time()
@@ -226,15 +230,12 @@ def train_PG(exp_name='',
     # Make the gym environment
     env = gym.make(env_name)
 
-    #env = gym.wrappers.Monitor(env, "./video/", force=True, video_callable=lambda episode_id: episode_id%300==0)
-
 
     to_animate = ToAnimate(False)
     to_animate.animate = False
 
-    #to_animate = lambda episode_id: episode_id==1 and to_animate.animate
-
-    env = gym.wrappers.Monitor(env, "./video/", force=True, video_callable=to_animate)
+    if save_video:
+        env = gym.wrappers.Monitor(env, "./video/", force=True, video_callable=to_animate)
 
 
     # Is this env continuous, or discrete?
@@ -314,10 +315,11 @@ def train_PG(exp_name='',
 
         sy_sampled_ac = tf.multinomial(sy_logits_na, 1)
 
-        # Get log-prob of actual taken action in trajectiory from net outputs
-        # indices = tf.transpose([tf.range(sy_ac_na.shape[0]), sy_ac_na])
-        indices = tf.one_hot(sy_ac_na, depth=2, dtype=tf.int32)
-        sy_logprob_n = tf.gather_nd(sy_logits_na, indices)
+        # positive log probs of actual taken action, so the values are negative
+        # Note thate cross entropy negate log probilities
+        sy_logprob_n = -tf.nn.sparse_softmax_cross_entropy_with_logits(
+                    labels=sy_ac_na, logits=sy_logits_na)
+
 
     else:
         # Network takes current observated state and outputs the meand and log
@@ -333,23 +335,36 @@ def train_PG(exp_name='',
             activation=tf.nn.relu,
         )
 
-        # logstd should just be a trainable variable, not a network output.
-        sy_logstd = tf.Variable(tf.ones(ac_dim))
+        #sy_logstd = tf.Variable(initial_value=np.random.normal(loc=0.0, scale=0.1),
+                                #dtype=tf.float32)
+        #sy_logstd = tf.Variable(tf.zeros([1, ac_dim]), name="policy/logstd", dtype=tf.float32)
+#
+        ## logstd should just be a trainable variable, not a network output.
+        ##sy_logstd = tf.Variable(tf.ones(ac_dim), dtype=tf.float32)
+        #sy_std = tf.exp(sy_logstd)
+#
+        #sy_sampled_ac = sy_mean + sy_std * tf.random_normal(shape=tf.shape(sy_mean))
+#
+        ## Hint: Use the log probability under a multivariate gaussian.
+        #dist = tf.distributions.Normal(loc=[sy_mean], scale=[sy_std])
+        #sy_logprob_n = dist.log_prob(sy_ac_na)
 
-        sy_sampled_ac = sy_mean + sy_logstd * tf.random_normal(shape=[None, ac_dim])
+        #sy_mean_na = build_mlp(sy_ob_no, ac_dim, "policy", n_layers=n_layers, size=size)
+        sy_logstd = tf.Variable(tf.zeros([1, ac_dim]), name="policy/logstd", dtype=tf.float32)
+        sy_std = tf.exp(sy_logstd)
 
-        # Hint: Use the log probability under a multivariate gaussian.
-        dist = tf.distributions.Normal(loc=[sy_mean], scale=[sy_logstd])
-        sy_logprob_n = tf.log(dist.prob(sy_ac_na))
+        # Sample an action from the stochastic policy
+        sy_sampled_z = tf.random_normal(tf.shape(sy_mean))
+        sy_sampled_ac = sy_mean + sy_std * sy_sampled_z
 
+        # Likelihood of chosen action
+        sy_z = (sy_ac_na - sy_mean) / sy_std
+        sy_logprob_n = -0.5 * tf.reduce_sum(tf.square(sy_z), axis=1)
 
     # Loss Function and Training Operation
-    negative_likelihoods = tf.nn.softmax_cross_entropy_with_logits(
-        labels=tf.one_hot(sy_ac_na, depth=ac_dim), logits=sy_logits_na)
-    weighted_negative_likelihoods = tf.multiply(negative_likelihoods, sy_adv_n)
 
-    loss = tf.reduce_mean(weighted_negative_likelihoods)
-
+    # negate becaouse of minimalization instead maximalization
+    loss = -tf.reduce_mean(sy_logprob_n * sy_adv_n)
     update_op = tf.train.AdamOptimizer(learning_rate).minimize(loss)
 
     if nn_baseline:
@@ -378,7 +393,7 @@ def train_PG(exp_name='',
     # ========================================================================================#
     # Training Loop
     # ========================================================================================#
-
+    #
     total_timesteps = 0
 
     for itr in range(n_iter):
@@ -454,12 +469,15 @@ def train_PG(exp_name='',
             sy_adv_n: adv_n  # adventages
         })
 
+
         # Log diagnostics
         returns = [path["reward"].sum() for path in paths]
         ep_lengths = [pathlength(path) for path in paths]
 
-        logz.log_tabular("Loss_before", loss_before)
-        logz.log_tabular("Loss_after", loss_after)
+        print(loss_before)
+        #logz.log_tabular("Loss_before", loss_before)
+        #logz.log_tabular("Loss_after", loss_after)
+        logz.log_tabular("delta_loss", loss_after-loss_before)
 
         logz.log_tabular("Time", time.time() - start)
         logz.log_tabular("Iteration", itr)
@@ -544,7 +562,11 @@ if __name__ == "__main__":
     # build_mlp_test()
 
     train_PG(
-        n_iter=100
+        #env_name="MountainCar-v0",
+        env_name = "MountainCarContinuous-v0",
+        #env_name="Pendulum-v0",
+        #env_name="CartPole-v0",
+        n_iter=500
     )
 
 
