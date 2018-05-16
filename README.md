@@ -7,6 +7,10 @@
 
 ## Progress:
 - [ ] homework 1: imitation learning - maybe someday
-- [ ] homework 2: policy gradient
+- [DEBUGGING] homework 2 (policy gradient):
+   + [X] CartPole
+   + [X] MountainCar(i think)
+   + [] Pendulum
+
 - [ ] homework 3: DQN
 - [ ] homework 4: idk
