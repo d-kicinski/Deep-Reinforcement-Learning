@@ -9,6 +9,38 @@ import inspect
 from multiprocessing import Process
 
 
+class BaselinePredictor(object):
+    def __init__(self, sy_ob_no, epoch_num, learning_rate, n_layers, size):
+        """Builds NN"""
+        self.sy_ob_no = sy_ob_no
+        self.epoch_num = epoch_num
+
+        self.baseline_pred = tf.squeeze(build_mlp(
+            input_placeholder = sy_ob_no,
+            output_size=1,
+            scope="nn_baseline",
+            n_layers=n_layers,
+            size=size))
+
+        self.sy_target = tf.placeholder(shape=[None], name="nn_baseline/target",
+                                    dtype=tf.float32)
+
+        #loss = 0.5 * tf.reduce_mean((self.sy_target-self.baseline_pred)**2)
+        loss = tf.nn.l2_loss(self.baseline_pred - self.sy_target)
+        self.update_op = tf.train.AdamOptimizer(learning_rate).minimize(loss)
+
+    def fit(self, inputs, labels):
+        sess = tf.get_default_session()
+        for _ in range(self.epoch_num):
+            sess.run([self.update_op], feed_dict={
+                self.sy_ob_no: inputs, self.sy_target: labels})
+
+    def predict(self, inputs):
+        sess = tf.get_default_session()
+        return sess.run([self.baseline_pred], feed_dict={self.sy_ob_no:
+                                                                 inputs})
+
+
 def build_mlp(
         input_placeholder,
         output_size,
@@ -19,7 +51,6 @@ def build_mlp(
         output_activation=None):
 
     with tf.variable_scope(scope):
-        # YOUR_CODE_HERE
 
         if n_layers == 0:
             return tf.layers.dense(inputs=input_placeholder,
@@ -49,7 +80,7 @@ def pathlength(path):
 
 
 def collect_paths(sess, sy_sampled_ac, sy_ob_no, env, min_timesteps,
-                  max_path_length, to_animate, itr):
+                  max_path_length, to_animate, itr, discrete):
     """Collects one batch of dataset. Return that many paths that when summed
        contain at minimum 'min_timesteps' timesteps.
 
@@ -66,7 +97,7 @@ def collect_paths(sess, sy_sampled_ac, sy_ob_no, env, min_timesteps,
         obs, acs, rewards = [], [], []
         #animate_this_episode = (len(paths) == 0 and (itr % 10 == 0) and animate)
 
-        animate = True
+        animate = False
         to_animate.animate = (len(paths) == 0 and (itr % 20 == 0) and animate)
 
         steps = 0
@@ -79,10 +110,13 @@ def collect_paths(sess, sy_sampled_ac, sy_ob_no, env, min_timesteps,
             obs.append(ob)
             ac = sess.run(sy_sampled_ac, feed_dict={sy_ob_no: ob[None]})
             #print("ac from tensor: ", ac)
-            ac = ac[0]
-            #print("ac extracted: ", ac)
-            acs.append(ac)
-            ob, rew, done, _ = env.step(ac)
+
+            acs.append(ac.flatten())
+            if discrete:
+                ob, rew, done, _ = env.step(ac.flatten()[0])
+            else:
+                ob, rew, done, _ = env.step(ac.flatten())
+
             rewards.append(rew)
             steps += 1
             if done or steps > max_path_length:
@@ -103,51 +137,7 @@ def collect_paths(sess, sy_sampled_ac, sy_ob_no, env, min_timesteps,
 
 
 def get_reward(paths, gamma=0.99, reward_to_go=True):
-    """Computing Q-values
-
-    Your code should construct numpy arrays for Q-values which will be used to compute
-    advantages (which will in turn be fed to the placeholder you defined above).
-
-    Recall that the expression for the policy gradient PG is
-
-    PG = E_{tau} [sum_{t=0}^T grad log pi(a_t|s_t) * (Q_t - b_t )]
-
-    where
-
-    tau=(s_0, a_0, ...) is a trajectory,
-    Q_t is the Q-value at time t, Q^{pi}(s_t, a_t),
-    and b_t is a baseline which may depend on s_t.
-
-    You will write code for two cases, controlled by the flag 'reward_to_go':
-
-    Case 1: trajectory-based PG
-    (reward_to_go = False)
-
-    Instead of Q^{pi}(s_t, a_t), we use the total discounted reward summed over
-    entire trajectory (regardless of which time step the Q-value should be for).
-
-    For this case, the policy gradient estimator is
-
-    E_{tau} [sum_{t=0}^T grad log pi(a_t|s_t) * Ret(tau)]
-
-    where
-    Ret(tau) = sum_{t'=0}^T gamma^t' r_{t'}.
-
-    Thus, you should compute
-    Q_t = Ret(tau)
-
-    Case 2: reward-to-go PG
-    (reward_to_go = True)
-
-    Here, you estimate Q^{pi}(s_t, a_t) by the discounted sum of rewards starting
-    from time step t. Thus, you should compute
-
-    Q_t = sum_{t'=t}^T gamma^(t'-t) * r_{t'}
-
-    Store the Q-values for all timesteps and all trajectories in a variable 'q_n',
-    like the 'ob_no' and 'ac_na' above.
-
-    """
+    """Computing Q-values"""
 
     if reward_to_go:
         #  Q_t = sum_{t'=t}^T gamma^(t'-t) * r_{t'}
@@ -168,7 +158,6 @@ def get_reward(paths, gamma=0.99, reward_to_go=True):
                     q_values.append(gammas[:-i] @ path_rewards[i:])
 
             q_values_n.append(q_values)
-
         q_n = np.concatenate(q_values_n)
     else:
         #  Q_t = sum_{t'=0}^T gamma^t' r_{t'}.
@@ -182,7 +171,7 @@ def get_reward(paths, gamma=0.99, reward_to_go=True):
             q_values_n.append([reward_sum] * len(path_rewards))
         q_n = np.concatenate(q_values_n)
 
-    return q_n
+    return q_n.flatten()
 
 
 class ToAnimate:
@@ -229,6 +218,8 @@ def train_PG(exp_name='',
 
     # Make the gym environment
     env = gym.make(env_name)
+    #env._max_episode_steps = 4000
+
 
 
     to_animate = ToAnimate(False)
@@ -252,59 +243,21 @@ def train_PG(exp_name='',
 
     sy_ob_no = tf.placeholder(shape=[None, ob_dim], name="ob", dtype=tf.float32)
     if discrete:
+        #sy_ac_na = tf.placeholder(shape=[None, ac_dim], name="ac", dtype=tf.int32)
         sy_ac_na = tf.placeholder(shape=[None], name="ac", dtype=tf.int32)
     else:
-        sy_ac_na = tf.placeholder(shape=[None, ac_dim], name="ac",
-                                  dtype=tf.float32)
+        sy_ac_na = tf.placeholder(shape=[None, ac_dim], name="ac", dtype=tf.float32)
 
     # Define a placeholder for advantages
     sy_adv_n = tf.placeholder(shape=[None], name="adv", dtype=tf.float32)
 
-    # ========================================================================================#
-    #                           ----------SECTION 4----------
-    # Networks
-    #
-    # Make symbolic operations for
-    #   1. Policy network outputs which describe the policy distribution.
-    #       a. For the discrete case, just logits for each action.
-    #
-    #       b. For the continuous case, the mean / log std of a Gaussian distribution over
-    #          actions.
-    #
-    #      Hint: use the 'build_mlp' function you defined in utilities.
-    #
-    #      Note: these ops should be functions of the placeholder 'sy_ob_no'
-    #
-    #   2. Producing samples stochastically from the policy distribution.
-    #       a. For the discrete case, an op that takes in logits and produces actions.
-    #
-    #          Should have shape [None]
-    #
-    #       b. For the continuous case, use the reparameterization trick:
-    #          The output from a Gaussian distribution with mean 'mu' and std 'sigma' is
-    #
-    #               mu + sigma * z,         z ~ N(0, I)
-    #
-    #          This reduces the problem to just sampling z. (Hint: use tf.random_normal!)
-    #
-    #          Should have shape [None, ac_dim]
-    #
-    #      Note: these ops should be functions of the policy network output ops.
-    #
-    #   3. Computing the log probability of a set of actions that were actually taken,
-    #      according to the policy.
-    #
-    #      Note: these ops should be functions of the placeholder 'sy_ac_na', and the
-    #      policy network output ops.
-    #
-    # ========================================================================================#
 
     if discrete:
         # Network takes current observated state outputs log probs of action to take
         sy_logits_na = build_mlp(
             input_placeholder=sy_ob_no,
             output_size=ac_dim,
-            scope="ham",
+            scope="policy",
             n_layers=n_layers,
             size=size,
             activation=tf.nn.relu,
@@ -317,8 +270,10 @@ def train_PG(exp_name='',
 
         # positive log probs of actual taken action, so the values are negative
         # Note thate cross entropy negate log probilities
+        # FIXME: now this is only valid for just one discrete action
         sy_logprob_n = -tf.nn.sparse_softmax_cross_entropy_with_logits(
-                    labels=sy_ac_na, logits=sy_logits_na)
+                    #labels=tf.reshape( sy_ac_na, [-1]), logits=sy_logits_na)
+                    labels= sy_ac_na, logits=sy_logits_na)
 
 
     else:
@@ -329,56 +284,35 @@ def train_PG(exp_name='',
         sy_mean = build_mlp(
             input_placeholder=sy_ob_no,
             output_size=net_output_dim,
-            scope="ham",
+            scope="policy",
             n_layers=n_layers,
             size=size,
             activation=tf.nn.relu,
         )
 
-        #sy_logstd = tf.Variable(initial_value=np.random.normal(loc=0.0, scale=0.1),
-                                #dtype=tf.float32)
-        #sy_logstd = tf.Variable(tf.zeros([1, ac_dim]), name="policy/logstd", dtype=tf.float32)
-#
-        ## logstd should just be a trainable variable, not a network output.
-        ##sy_logstd = tf.Variable(tf.ones(ac_dim), dtype=tf.float32)
-        #sy_std = tf.exp(sy_logstd)
-#
-        #sy_sampled_ac = sy_mean + sy_std * tf.random_normal(shape=tf.shape(sy_mean))
-#
-        ## Hint: Use the log probability under a multivariate gaussian.
-        #dist = tf.distributions.Normal(loc=[sy_mean], scale=[sy_std])
-        #sy_logprob_n = dist.log_prob(sy_ac_na)
+        sy_logstd_na = tf.get_variable("policy/logstd", [ac_dim],
+                                       initializer=tf.zeros_initializer(), dtype=tf.float32)
+        dist = tf.distributions.Normal(loc=[sy_mean],
+                                       scale=[tf.exp(sy_logstd_na)], validate_args=True)
+        sy_sampled_ac = dist.sample()
 
-        #sy_mean_na = build_mlp(sy_ob_no, ac_dim, "policy", n_layers=n_layers, size=size)
-        sy_logstd = tf.Variable(tf.zeros([1, ac_dim]), name="policy/logstd", dtype=tf.float32)
-        sy_std = tf.exp(sy_logstd)
+        # later i'will want to maximize propbs in all dimensions so adding them now
+        # nothing change really but generalize loss function
+        sy_logprob_n = tf.reduce_sum(dist.log_prob(sy_ac_na), axis=1)
 
-        # Sample an action from the stochastic policy
-        sy_sampled_z = tf.random_normal(tf.shape(sy_mean))
-        sy_sampled_ac = sy_mean + sy_std * sy_sampled_z
-
-        # Likelihood of chosen action
-        sy_z = (sy_ac_na - sy_mean) / sy_std
-        sy_logprob_n = -0.5 * tf.reduce_sum(tf.square(sy_z), axis=1)
 
     # Loss Function and Training Operation
 
     # negate becaouse of minimalization instead maximalization
     loss = -tf.reduce_mean(sy_logprob_n * sy_adv_n)
+
     update_op = tf.train.AdamOptimizer(learning_rate).minimize(loss)
 
     if nn_baseline:
-        baseline_prediction = tf.squeeze(build_mlp(
-            sy_ob_no,
-            1,
-            "nn_baseline",
-            n_layers=n_layers,
-            size=size))
-        # Define placeholders for targets, a loss function and an update op for fitting a
-        # neural network baseline. These will be used to fit the neural network baseline.
-        # YOUR_CODE_HERE
-        # baseline_update_op = TODO
-        raise NotImplemented
+        baseline_predictor = BaselinePredictor(sy_ob_no, epoch_num=500,
+                                               learning_rate=learning_rate,
+                                               n_layers=n_layers, size=size)
+
 
     # ========================================================================================#
     # Tensorflow Engineering: Config, Session, Variable initialization
@@ -402,7 +336,7 @@ def train_PG(exp_name='',
         # Collect paths until we have enough timesteps for one batch
         paths, num_collected_timesteps = collect_paths(sess, sy_sampled_ac, sy_ob_no, env,
                                                        min_timesteps, max_path_length,
-                                                       to_animate, itr)
+                                                       to_animate, itr, discrete)
         total_timesteps += num_collected_timesteps
 
         # Build arrays for observation, action for the policy gradient update
@@ -420,10 +354,13 @@ def train_PG(exp_name='',
             # (mean and std) of the current or previous batch of Q-values. (Goes with Hint
             # #bl2 below.)
 
-            # fuckme : what the fuck?
-            # b_n = TODO
-            # adv_n = q_n - b_n
-            pass
+            # Rescaling the output to mach statistics of Q-values
+            b_n = baseline_predictor.predict(ob_no)[0]
+            b_n = (b_n - np.mean(b_n)) / np.std(b_n)
+            b_n = np.mean(q_n) + (b_n * np.std(q_n))
+            adv_n = q_n - b_n
+
+            # fuckme : what the fuck?  // few days later: calm down boi gatcha ya
         else:
             adv_n = q_n.copy()
 
@@ -442,14 +379,9 @@ def train_PG(exp_name='',
             # Hint #bl2: Instead of trying to target raw Q-values directly, rescale the
             # targets to have mean zero and std=1. (Goes with Hint #bl1 above.)
 
-            # fuckme part two
-            # YOUR_CODE_HERE
-            pass
+            baseline_predictor.fit(inputs=ob_no, labels=(q_n - np.mean(q_n)) / np.std(q_n))
 
-        #print("ob: ", type(ob_no))
-        #print("na: ", type(ob_no))
-        #print("adv: ", type(ob_no))
-
+        if discrete: ac_na = ac_na.flatten()
 
         loss_before = sess.run(loss, feed_dict={
             sy_ob_no: ob_no,  # observation
@@ -563,10 +495,13 @@ if __name__ == "__main__":
 
     train_PG(
         #env_name="MountainCar-v0",
-        env_name = "MountainCarContinuous-v0",
-        #env_name="Pendulum-v0",
+        #env_name = "MountainCarContinuous-v0",
+        env_name="Pendulum-v0",
         #env_name="CartPole-v0",
-        n_iter=500
+        nn_baseline=True,
+        normalize_advantages=True,
+        n_iter=500,
+        max_path_length=4000,
     )
 
 
