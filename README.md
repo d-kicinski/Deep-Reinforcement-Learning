@@ -3,8 +3,12 @@ Implementations of classic Deep Rl algorithms, mostly based on CS 294: Deep
 Reinforcement Learning at [Berekley](http://rail.eecs.berkeley.edu/deeprlcourse-fa17/index.html)
 
 Current state:
-- [X] Policy Gradient
+- [X] Policy Gradient:
+
+      Basically my solution to heavily refactored CS294 second homework. Tensorflow ლ(ಠ益ಠლ)
 - [ ] DQN
+
+      Still based on CS294 but implemented in  PyTorch ✧ﾟ･: *ヽ(◕ヮ◕ヽ)
    + [X] Discrete action space
    + [ ] Continous action space
 
