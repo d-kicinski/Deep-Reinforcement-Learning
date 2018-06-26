@@ -1,0 +1,22 @@
+
+# Experiment description:
+# -n : Number of iteration.
+# -b : Batch size(number of state-action pairs sampled while acting according to
+#      the current policy at each iteration).
+# -e : Number of experiments to run with the same configuration. Each experiment
+#      will start with a different randomly initialized policy, and have a different
+#      stream of random numbers.
+# -dna : Flag: if present, sets normalize_adventages to False. Otherwise, by
+#        default, normalize_adventages=True.
+# -rtg : Flag: if present, sets reward_to_go=True. Otherwise, by default, reward_to_go=False.
+# -exp_name : Name for experiment, which goes into the name for the data directory
+
+
+#python train_pg.py CartPole-v0 -n 100 -b 1000 -e 5 -dna --exp_name sb_no_rtg_dna
+#python train_pg.py CartPole-v0 -n 100 -b 1000 -e 5 -rtg -dna --exp_name sb_rtg_dna
+#python train_pg.py CartPole-v0 -n 100 -b 1000 -e 5 -rtg --exp_name sb_rtg_na
+#
+#
+#python src/train_pg.py CartPole-v0 -n 100 -b 5000 -e 5 -dna --exp_name lb_no_rtg_dna
+#python src/train_pg.py CartPole-v0 -n 100 -b 5000 -e 5 -rtg -dna --exp_name lb_rtg_dna
+python src/train_pg.py CartPole-v0 -n 100 -b 5000 -e 5 -rtg  --exp_name lb_rtg_na
