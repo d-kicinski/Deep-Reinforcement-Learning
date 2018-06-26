@@ -1,5 +1,5 @@
 # Deep reinforcement algorithms
-Implementations of classic Deep Rl algorithms, mostly based on CS 294: Deep
+Implementations of classic Deep RL algorithms, mostly based on CS 294: Deep
 Reinforcement Learning at [Berekley](http://rail.eecs.berkeley.edu/deeprlcourse-fa17/index.html)
 
 Current state:
