@@ -13,3 +13,9 @@ Current state:
 <p align="center">
 <img src="/res/cartpole-pg.gif" width="400" height="300">
 </p>
+
+
+<p align="center">
+<img src="/res/car-dqn.gif" width="400" height="300">
+</p>
+

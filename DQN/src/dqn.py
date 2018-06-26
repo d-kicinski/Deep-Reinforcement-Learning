@@ -20,6 +20,7 @@ from gym import wrappers
 
 import dqn_utils as utils
 
+import log as logz
 
 def DQN_train(exp_name, env_name, seed, render,
               params_dqn,
@@ -28,7 +29,7 @@ def DQN_train(exp_name, env_name, seed, render,
               params_nn, logdir=None):
 
     # Configure output directory for logging
-    from external import logz
+    #from external import log as logz
     logz.configure_output_dir(logdir)
 
     # Log experiments parameters
@@ -45,6 +46,9 @@ def DQN_train(exp_name, env_name, seed, render,
     if params_optim.episode_len > 0:
         env = gym.make(env_name)
         env._max_episode_steps = params_optim.episode_len
+
+    if(render):
+        env = gym.wrappers.Monitor(env, "./video")
 
     assert type(env.observation_space) == gym.spaces.Box
     assert type(env.action_space) == gym.spaces.Discrete
