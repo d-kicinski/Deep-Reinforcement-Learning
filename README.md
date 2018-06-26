@@ -1,16 +1,15 @@
-# My solutions for berekley cs294 assignments.
+# Deep reinforcement algorithms
+Implementations of classic Deep Rl algorithms, mostly based on CS 294: Deep
+Reinforcement Learning at [Berekley](http://rail.eecs.berkeley.edu/deeprlcourse-fa17/index.html)
 
-## Course info:
-- Name: CS 294: Deep Reinforcement Learning, Fall 2017
-- Link: http://rll.berkeley.edu/deeprlcourse/
+Current state:
+- [X] Policy Gradient
+- [ ] DQN
+   + [X] Discrete action space
+   + [ ] Continous action space
 
+## Solved classic control environments:
 
-## Progress:
-- [ ] homework 1: imitation learning - maybe someday
-- [DEBUGGING] homework 2 (policy gradient):
-   + [X] CartPole
-   + [X] MountainCar(i think)
-   + [] Pendulum
-
-- [ ] homework 3: DQN
-- [ ] homework 4: idk
+<p align="center">
+<img src="/res/cartpole-pg.gif" width="400" height="300">
+</p>

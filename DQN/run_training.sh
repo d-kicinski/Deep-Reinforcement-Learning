@@ -14,7 +14,7 @@
 
 
 python src/dqn.py --env_name MountainCar-v0 \
-	--render \
+	     --render \
        --n_experiments 1 \
        --seed 1 \
        --episode_num 1001 --episode_len 200  \
